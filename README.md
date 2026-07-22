@@ -3,33 +3,79 @@
 import pandas as pd
 from pathlib import Path
 
-input_file = Path(
-    "54781532UC02001_jak_uc_ard_20260622.xlsx"
+# ==========================================================
+# Configuration
+# ==========================================================
+
+input_folder = Path(
+    r"C:\Users\JMende95\OneDrive - JNJ\Desktop\ard_data"
 )
 
-output_folder = Path("csv")
+output_folder = input_folder / "csv"
 output_folder.mkdir(exist_ok=True)
 
-ard_df = pd.read_excel(
-    input_file,
-    sheet_name="ARD"
-)
+# ==========================================================
+# Convert all ARD Excel files
+# ==========================================================
 
-dictionary_df = pd.read_excel(
-    input_file,
-    sheet_name="PARAMCD_DICT"
-)
+xlsx_files = sorted(input_folder.glob("*.xlsx"))
 
-ard_df.to_csv(
-    output_folder / "jak_uc_ard.csv",
-    index=False,
-    encoding="utf-8-sig"
-)
+if not xlsx_files:
+    print("No Excel files found.")
+    exit()
 
-dictionary_df.to_csv(
-    output_folder / "jak_uc_paramcd_dict.csv",
-    index=False,
-    encoding="utf-8-sig"
-)
+print(f"Found {len(xlsx_files)} Excel files.\n")
 
-print("CSV files created successfully.")
+converted = 0
+failed = 0
+
+for file in xlsx_files:
+
+    print(f"Processing: {file.name}")
+
+    try:
+
+        # Read worksheets
+        ard_df = pd.read_excel(file, sheet_name="ARD")
+        dict_df = pd.read_excel(file, sheet_name="PARAMCD_DICT")
+
+        # Base filename (without extension)
+        base_name = file.stem
+
+        # Output filenames
+        ard_output = output_folder / f"{base_name}_ARD.csv"
+        dict_output = output_folder / f"{base_name}_PARAMCD_DICT.csv"
+
+        # Export CSV
+        ard_df.to_csv(
+            ard_output,
+            index=False,
+            encoding="utf-8-sig"
+        )
+
+        dict_df.to_csv(
+            dict_output,
+            index=False,
+            encoding="utf-8-sig"
+        )
+
+        print("   ✓ ARD exported")
+        print("   ✓ PARAMCD_DICT exported\n")
+
+        converted += 1
+
+    except Exception as e:
+
+        failed += 1
+        print(f"   ✗ Error: {e}\n")
+
+# ==========================================================
+# Summary
+# ==========================================================
+
+print("=" * 50)
+print("Conversion completed")
+print("=" * 50)
+print(f"Files converted : {converted}")
+print(f"Files failed    : {failed}")
+print(f"CSV folder      : {output_folder}")
