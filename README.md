@@ -1,34 +1,24 @@
 # example2
 
-O que significa ICE?
+1. ICE 1-5
 
-ICE = Intercurrent Event
+As previously noted:
 
-Segundo o guideline ICH E9(R1), um intercurrent event é qualquer evento que ocorre após o início do tratamento e que pode afetar a interpretação ou a existência da medida de eficácia.
+ICE = Intercurrent Events
 
-Exemplos em estudos de DII:
+These are events defined in the protocol (discontinuation, rescue medication, surgery, etc.).
 
-Paciente interrompe o tratamento.
-Paciente inicia outra terapia para DII.
-Paciente faz cirurgia.
-Paciente perde uma visita.
-Paciente abandona o estudo.
+The designation "1-5" indicates that the rule was applied to Intercurrent Events 1 through 5 as described in the SAP.
 
-Esses são os chamados Intercurrent Events (ICEs).
+2. What does BL mean?
 
-O que significa "ICE 1-5"?
+BL = Baseline
 
-Cada protocolo define seus próprios ICEs.
+In this context, "Baseline" typically indicates that, for patients who experienced ICEs 1–5, the value was handled using the baseline value.
 
-Por exemplo:
+In other words, the endpoint was calculated using a strategy based on the patient's initial value.
 
-ICE	Exemplo
-ICE 1	Descontinuação do tratamento
-ICE 2	Uso de medicação de resgate
-ICE 3	Cirurgia relacionada à DII
-ICE 4	Mudança de tratamento proibida
-ICE 5	Retirada do estudo
+This often corresponds to approaches such as:
 
-O protocolo então pode dizer:
-
-"Para os ICEs 1–5, o paciente será considerado um Non-Responder."
+Baseline Carried Forward (BCF)
+or another baseline-based strategy defined in the SAP.
