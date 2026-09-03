@@ -8,4 +8,6 @@ I’ve added comments to the column headers indicating where each field should c
 
 For now, you can start populating the fields for which we already have information in the original file. If you come across missing fields, it would also be helpful to investigate whether that information is available somewhere else and can be added to the inventory.
 
-Let me know if you have any questions or if anything is unclear while going through it.
+@Pablo, I also added a new 08_DATA_ANALYSIS tab to the inventory based on your suggestion in the V-Squad group. I included fields to capture the analysis performed, dataset used, SAP reference, and corresponding Bitbucket code, so we can better track the analysis metadata and traceability.
+
+Let me know if you have any questions or suggestions as we start filling this out.
