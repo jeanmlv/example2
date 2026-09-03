@@ -18,3 +18,5 @@ Please let me know if this matches your understanding as well. I’m happy to re
 
 Thanks,
 Jean
+
+With that in mind, one suggestion for the process flow would be to adjust the position of the “ARD Creation” step in the diagram, since the ARD is initially created from the available ADaM data and is then used to perform the variable gap analysis. It can subsequently be updated as additional variables/data become available through the follow-up process.
