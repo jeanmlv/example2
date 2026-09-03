@@ -1,24 +1,20 @@
 # example2
 
-1. ICE 1-5
+Hi Sonal,
 
-As previously noted:
+Thank you, this makes sense to me and the proposed flow looks good.
 
-ICE = Intercurrent Events
+Just one clarification regarding the ARD creation: on our side, I am currently generating the ARD using the ADaM datasets already available to us. I then use the ARD to perform the variable discovery/gap analysis against our list of variables of interest.
 
-These are events defined in the protocol (discontinuation, rescue medication, surgery, etc.).
+So, we do not necessarily wait until all variable gaps are resolved before creating the ARD. The current process is more like:
 
-The designation "1-5" indicates that the rule was applied to Intercurrent Events 1 through 5 as described in the SAP.
+Available ADaM data → Create/Update ARD → Perform variable gap analysis → Follow up on unresolved variables → Update the ARD as additional variables/data become available, if needed.
 
-2. What does BL mean?
+Based on my understanding, the main role of ORBIT in this process would therefore be to help manage the unresolved variable gaps and the interaction with the IDARs/PLs, with Basudeb/Rahul helping coordinate those follow-ups.
 
-BL = Baseline
+So at this point, I don't think we would need ORBIT to generate the ARD itself, since I am already doing that on our side. The main need would be to use ORBIT to centralize and track the variable discovery follow-up.
 
-In this context, "Baseline" typically indicates that, for patients who experienced ICEs 1–5, the value was handled using the baseline value.
+Please let me know if this matches your understanding as well. I’m happy to review the updated flow together once you finalize it.
 
-In other words, the endpoint was calculated using a strategy based on the patient's initial value.
-
-This often corresponds to approaches such as:
-
-Baseline Carried Forward (BCF)
-or another baseline-based strategy defined in the SAP.
+Thanks,
+Jean
