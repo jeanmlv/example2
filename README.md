@@ -1,364 +1,128 @@
 # example2
 
-from pathlib import Path
-
-import pandas as pd
-import plotly.express as px
-import streamlit as st
-
-from src.ard_loader import (
-    discover_ard_files,
-    filter_ard_files_for_studies,
-    load_ard,
-    load_uploaded_ard,
-    ordered_visits,
-    prepare_variable_data,
-    study_id_from_filename,
-    variable_catalog,
+#!/usr/bin/env Rscript
+# STARDUST ADaM metadata evidence audit v6
+# Usage: Rscript stardust_metadata_gap_v6.R [input.csv|input.xlsx] [metadata_dir] [output_dir]
+# Requires: readxl. Read-only source processing; no clinical data exported.
+suppressPackageStartupMessages(library(readxl))
+args <- commandArgs(trailingOnly=TRUE)
+root <- '/domino/datasets/local/clinical-trial-data/CNTO1275CRD3005-STARDUST/load-1884/Metadata'
+input_path <- if(length(args)>0) args[1] else file.path(root,'scripts','stardust_variables_of_interest.csv')
+meta_dir <- if(length(args)>1) args[2] else root
+out_dir <- if(length(args)>2) args[3] else file.path(root,'stardust_metadata_gap_results_v6')
+if(!file.exists(input_path)) stop('Input not found: ',input_path)
+if(!dir.exists(meta_dir)) stop('Metadata directory not found: ',meta_dir)
+clean <- function(x) {
+  x <- as.character(x)
+  x[is.na(x)] <- ""
+  x <- toupper(trimws(x))
+  gsub("[^A-Z0-9]+", "", x)
+}
+normalize <- function(x) {x<-iconv(clean(x),to='ASCII//TRANSLIT',sub='');x[is.na(x)]<-'';toupper(trimws(gsub('[^A-Za-z0-9]+',' ',x)))}
+code <- function(x) toupper(gsub('[^A-Za-z0-9_]','',clean(x)))
+read_input <- function(path) {
+ if(grepl('\\.xlsx?$',path,ignore.case=TRUE)) return(as.data.frame(readxl::read_excel(path,sheet='STARDUST',.name_repair='minimal'),check.names=FALSE))
+ header <- readLines(path,n=1,warn=FALSE,encoding='UTF-8')
+ sep <- if(length(header) && grepl(';',header,fixed=TRUE) && !grepl(',',header,fixed=TRUE)) ';' else ','
+ read.csv(path,sep=sep,check.names=FALSE,stringsAsFactors=FALSE,fileEncoding='UTF-8-BOM')
+}
+inp <- read_input(input_path)
+names(inp) <- tolower(trimws(sub('^\\ufeff','',names(inp))))
+required <- c('variable_of_interest','name')
+if(!all(required %in% names(inp))) stop('Input requires variable_of_interest and name. Found: ',paste(names(inp),collapse=', '))
+inp$variable_code <- code(inp$variable_of_interest)
+inp$variable_label <- clean(inp$name)
+inp <- inp[nzchar(inp$variable_code),,drop=FALSE]
+if(!nrow(inp)) stop('No valid variables in input')
+inp$input_row <- seq_len(nrow(inp))
+files <- list.files(meta_dir,pattern='\\.xlsx?$',full.names=TRUE,ignore.case=TRUE)
+if(!length(files)) stop('No XLS/XLSX files in metadata directory')
+# Preserve Excel coordinates; readxl trims leading blank rows/columns by default.
+# Explicit wide range anchors A1 and supports up to 2000 rows and 60 columns.
+# Warnings are logged; failed sheets cause an INCOMPLETE audit status.
+all <- list(); diagnostics <- list(); k <- 0L
+for(f in files) {
+ sheets <- tryCatch(readxl::excel_sheets(f),error=function(e) {warning(conditionMessage(e));character()})
+ if(!length(sheets)) diagnostics[[length(diagnostics)+1L]] <- data.frame(file=basename(f),sheet='',status='ERROR',message='No readable sheets')
+ for(s in sheets) {
+  err <- ''
+  tab <- tryCatch(suppressWarnings(readxl::read_excel(f,sheet=s,range=readxl::cell_limits(c(1,1),c(2000,60)),col_names=FALSE,col_types='text',.name_repair='minimal')),error=function(e) {err<<-conditionMessage(e);NULL})
+  diagnostics[[length(diagnostics)+1L]] <- data.frame(file=basename(f),sheet=s,status=if(is.null(tab)) 'ERROR' else 'OK',message=err)
+  if(is.null(tab)) next
+  mat <- as.matrix(tab)
+  if(!length(mat)) next
+  mat[is.na(mat)] <- ''
+  inds <- which(nzchar(trimws(mat)),arr.ind=TRUE)
+  if(!nrow(inds)) next
+  for(j in seq_len(nrow(inds))) {
+   r <- inds[j,1]; c <- inds[j,2]; val <- clean(mat[r,c]);
+   ctx <- paste(clean(mat[r,which(nzchar(trimws(mat[r,])))]),collapse=' | ')
+   k<-k+1L
+   all[[k]] <- data.frame(file=basename(f),dataset=toupper(sub('\\.xlsx?$','',basename(f),ignore.case=TRUE)),sheet=s,row=r,column=c,value=val,row_context=substr(ctx,1,3000),stringsAsFactors=FALSE)
+  }
+ }
+}
+if(!length(all)) stop('No metadata cells could be read. No reports created.')
+cells <- do.call(rbind,all)
+diag <- do.call(rbind,diagnostics)
+# Structural classification: column 7 is variable name in ADaM dataset tabs,
+# column 8 in ADM Codelist is often the code and column 10 its label.
+# These positions are based on observed ADEFF/ADQS exports; each row is retained for review.
+classify <- function(sheet,col,val,query_code) {
+ s<-toupper(trimws(sheet));v<-code(val)
+ if(s=='ADM CODELIST' && col==8 && v==query_code) return('CODELIST_CODE')
+ if(s=='ADM CODELIST' && col==10) return('CODELIST_LABEL')
+ if(s=='ADM DATASET') return('DATASET_STRUCTURE_REFERENCE')
+ if(s %in% c('ADEFF','ADQS','ADSL','ADAE','ADCM','ADLB','ADMH','ADPC','ADVS','ADTE','ADTFTE','ADDDV','ADDX','ADDISP','ADLBS') && col==7 && v==query_code) return('DEFINED_ADAM_VARIABLE')
+ if(col==21 || grepl('\\b(IF|THEN|ELSE|DERIV|SET TO|PARAMCD|LBTESTCD)\\b',toupper(val),perl=TRUE)) return('DERIVATION_REFERENCE')
+ 'OTHER_TEXT_REFERENCE'
+}
+# Clinical synonyms are search candidates only, not confirmed equivalence.
+synonyms <- list(
+ CALPRO=c('FECAL CALPROTECTIN','FAECAL CALPROTECTIN','CALPROTECTIN'),
+ CRP=c('C REACTIVE PROTEIN'),
+ SESCDTOT=c('SES CD TOTAL','SIMPLE ENDOSCOPIC SCORE','SESCD TOTAL'),
+ CDAI=c('CROHN S DISEASE ACTIVITY INDEX','CDAI TOTAL'),
+ CDAITOT=c('CROHN S DISEASE ACTIVITY INDEX'),
+ FC=c('FECAL CALPROTECTIN','FAECAL CALPROTECTIN')
 )
-from src.config import JNJ_RED, JNJ_RED_PALETTE
+# Prevent broad labels like AGE, SEX, N, etc. from creating fuzzy hits.
+evidence <- list(); summary <- list()
+for(i in seq_len(nrow(inp))) {
+ q<-inp$variable_code[i]; label<-normalize(inp$variable_label[i]);
+ # Code must be a full token; never match substrings of longer codes.
+ pattern<-paste0('(^|[^A-Z0-9_])',q,'($|[^A-Z0-9_])')
+ exact<-grepl(pattern,toupper(cells$value),perl=TRUE)
+ terms<-unique(c(if(nchar(label)>=12 && length(strsplit(label,' ',fixed=TRUE)[[1]])>=2) label else character(),synonyms[[q]]))
+ desc<-rep(FALSE,nrow(cells))
+ for(term in terms) if(nchar(term)>=8) desc<-desc | grepl(term,normalize(cells$value),fixed=TRUE)
+ idx<-which(exact|desc)
+ ev <- if(length(idx)) cells[idx,,drop=FALSE] else NULL
+ if(!is.null(ev)) {
+  ev$variable_of_interest<-q
+  ev$match_basis<-ifelse(exact[idx],'EXACT_CODE_TOKEN','DESCRIPTION_CANDIDATE')
+  ev$evidence_type<-mapply(function(sh,co,v,ex) if(!ex) 'CLINICAL_CONCEPT_CANDIDATE' else classify(sh,co,v,q),ev$sheet,ev$column,ev$value,exact[idx],USE.NAMES=FALSE)
+  ev$evidence_type[ev$evidence_type=='OTHER_TEXT_REFERENCE' & ev$match_basis=='EXACT_CODE_TOKEN'] <- 'OTHER_TEXT_REFERENCE'
+  ev$review_required <- TRUE
+  evidence[[length(evidence)+1L]]<-ev[,c('variable_of_interest','dataset','file','sheet','row','column','match_basis','evidence_type','value','row_context','review_required')]
+ }
+ types<-if(is.null(ev)) character() else unique(ev$evidence_type)
+ level<-if('DEFINED_ADAM_VARIABLE' %in% types) 'DEFINED_ADAM_VARIABLE' else if('CODELIST_CODE' %in% types) 'CODELIST_CODE_DOCUMENTED' else if('DERIVATION_REFERENCE' %in% types) 'DERIVATION_REFERENCE_ONLY' else if('CLINICAL_CONCEPT_CANDIDATE' %in% types || 'CODELIST_LABEL' %in% types) 'CLINICAL_CONCEPT_CANDIDATE' else if(length(types)) 'OTHER_METADATA_REFERENCE' else 'NOT_IDENTIFIED_IN_METADATA'
+ incomplete<-any(diag$status!='OK')
+ if(incomplete && level=='NOT_IDENTIFIED_IN_METADATA') level<-'INCOMPLETE_METADATA_REVIEW'
+ summary[[i]]<-data.frame(input_row=inp$input_row[i],variable_of_interest=q,name=inp$variable_label[i],previous_status=if('available? (y/n)' %in% names(inp)) clean(inp[['available? (y/n)']][i]) else '',evidence_level=level,metadata_documented=if(level=='DEFINED_ADAM_VARIABLE') 'YES_VARIABLE_DEFINITION' else if(level=='CODELIST_CODE_DOCUMENTED') 'YES_CODELIST_REFERENCE' else if(level=='NOT_IDENTIFIED_IN_METADATA') 'NO_EVIDENCE_FOUND' else 'REVIEW_REQUIRED',dataset_presence_confirmed='NOT_TESTED',clinical_collection_confirmed='NOT_TESTED',evidence_count=length(idx),candidate_datasets=if(length(idx)) paste(unique(ev$dataset),collapse='; ') else '',review_recommendation=if(level=='NOT_IDENTIFIED_IN_METADATA') 'Review SDTM and actual ADaM datasets before declaring unavailable' else 'Validate evidence context and actual dataset/PARAMCD values',stringsAsFactors=FALSE)
+}
+res<-do.call(rbind,summary)
+ev<-if(length(evidence)) do.call(rbind,evidence) else data.frame(variable_of_interest=character(),dataset=character(),file=character(),sheet=character(),row=integer(),column=integer(),match_basis=character(),evidence_type=character(),value=character(),row_context=character(),review_required=logical())
+if(nrow(res)!=nrow(inp)) stop('INTERNAL ERROR: summary count differs from input; no files exported')
+# Exports are atomic-ish: create output only after successful validation.
+dir.create(out_dir,recursive=TRUE,showWarnings=FALSE)
+if(!dir.exists(out_dir)) stop('Cannot create output directory: ',out_dir)
+write.csv(res,file.path(out_dir,'stardust_gap_summary_v6.csv'),row.names=FALSE,na='')
+write.csv(ev,file.path(out_dir,'stardust_metadata_evidence_v6.csv'),row.names=FALSE,na='')
+write.csv(diag,file.path(out_dir,'stardust_read_diagnostics_v6.csv'),row.names=FALSE,na='')
+write.csv(as.data.frame(table(res$evidence_level),stringsAsFactors=FALSE),file.path(out_dir,'stardust_status_counts_v6.csv'),row.names=FALSE)
+cat('Input variables:',nrow(inp),'\nMetadata files:',length(files),'\nMetadata cells:',nrow(cells),'\nSummary rows:',nrow(res),'\nEvidence rows:',nrow(ev),'\nRead errors:',sum(diag$status!='OK'),'\nOutput:',out_dir,'\n')
+print(table(res$evidence_level))
+cat('IMPORTANT: Metadata evidence does NOT prove records exist or were collected.\n')
 
-
-def _render_portfolio_summary(filtered: dict[str, pd.DataFrame]) -> None:
-    s = filtered["01_STUDIES"]
-    avail = filtered.get("02_DATA_AVAILABILITY", pd.DataFrame())
-    ard = filtered.get("06_ARD", pd.DataFrame())
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Studies", s["Study ID"].nunique() if "Study ID" in s else 0)
-    c2.metric("Patients", f"{pd.to_numeric(s.get('Patients'), errors='coerce').sum():,.0f}" if "Patients" in s else "—")
-    c3.metric("Videos", f"{pd.to_numeric(s.get('Videos'), errors='coerce').sum():,.0f}" if "Videos" in s else "—")
-
-    available = (
-        avail["Analysis-Ready-Dataset (ARD)"].astype(str).str.lower().eq("available").sum()
-        if "Analysis-Ready-Dataset (ARD)" in avail
-        else 0
-    )
-    c4.metric("ARD available", available)
-
-    # Mean ARD coverage: same calculation as views/ard.py.
-    # Excel percentages are typically loaded as fractions (e.g. 0.89 = 89%).
-    from views.ard import calculate_mean_coverage
-
-    avg = calculate_mean_coverage(ard)
-    c5.metric(
-        "Mean ARD coverage",
-        f"{avg:.0f}%" if pd.notna(avg) else "—",
-        help="Average ARD coverage for studies with coverage >= 1%.",
-    )
-
-
-def _render_portfolio_charts(filtered: dict[str, pd.DataFrame]) -> None:
-    s = filtered["01_STUDIES"]
-    left, right = st.columns([1, 1], gap="large")
-
-    with left:
-        st.markdown("### Portfolio by disease")
-        if "Disease" in s and not s.empty:
-            x = s["Disease"].fillna("Not specified").value_counts().reset_index()
-            x.columns = ["Disease", "Studies"]
-            fig = px.bar(
-                x,
-                x="Studies",
-                y="Disease",
-                orientation="h",
-                text="Studies",
-                color_discrete_sequence=[JNJ_RED],
-            )
-            fig.update_layout(
-                height=330,
-                margin=dict(l=5, r=10, t=15, b=10),
-                yaxis_title="",
-                xaxis_title="Studies",
-                showlegend=False,
-            )
-            st.plotly_chart(fig, width="stretch")
-
-    with right:
-        st.markdown("### Trial status")
-        if "Trial Status" in s and not s["Trial Status"].dropna().empty:
-            x = s["Trial Status"].fillna("Not specified").astype(str).value_counts().reset_index()
-            x.columns = ["Trial Status", "Count"]
-            fig = px.pie(
-                x,
-                names="Trial Status",
-                values="Count",
-                hole=0.62,
-                color_discrete_sequence=[JNJ_RED, "#F97066", "#FECACA", "#667085", "#98A2B3"],
-            )
-            fig.update_traces(textposition="inside", textinfo="percent")
-            fig.update_layout(
-                height=330,
-                margin=dict(l=5, r=10, t=15, b=10),
-                legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02),
-                legend_title_text="",
-            )
-            st.plotly_chart(fig, width="stretch")
-
-
-def _render_numeric_explorer(variable_df: pd.DataFrame, variable: str, visits: list[str]) -> None:
-    left, right = st.columns(2, gap="large")
-
-    with left:
-        st.markdown("#### Overall distribution")
-        fig = px.histogram(variable_df, x="VALUE", nbins=30, labels={"VALUE": variable})
-        fig.update_traces(marker_color=JNJ_RED)
-        fig.update_layout(
-            height=360,
-            margin=dict(l=10, r=10, t=10, b=10),
-            yaxis_title="Observations",
-            showlegend=False,
-        )
-        st.plotly_chart(fig, width="stretch")
-
-    with right:
-        st.markdown("#### Distribution by visit")
-        if "AVISIT" not in variable_df.columns or not visits:
-            st.info("AVISIT is not available for this ARD variable.")
-            return
-        fig = px.box(
-            variable_df,
-            x="AVISIT",
-            y="VALUE",
-            points=False,
-            category_orders={"AVISIT": visits},
-            labels={"VALUE": variable, "AVISIT": "Visit"},
-        )
-        fig.update_traces(marker_color=JNJ_RED, line_color=JNJ_RED)
-        fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
-        fig.update_xaxes(tickangle=-45)
-        st.plotly_chart(fig, width="stretch")
-
-
-def _render_categorical_explorer(variable_df: pd.DataFrame, variable: str, visits: list[str]) -> None:
-    # Protect readability from high-cardinality AVALC variables.
-    overall = variable_df["VALUE"].astype(str).value_counts().head(20).rename_axis("Value").reset_index(name="Count")
-    left, right = st.columns(2, gap="large")
-
-    with left:
-        st.markdown("#### Overall distribution")
-        fig = px.bar(overall, x="Count", y="Value", orientation="h", text="Count")
-        fig.update_traces(marker_color=JNJ_RED)
-        fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="", showlegend=False)
-        st.plotly_chart(fig, width="stretch")
-
-    with right:
-        st.markdown("#### Distribution by visit")
-        if "AVISIT" not in variable_df.columns or not visits:
-            st.info("AVISIT is not available for this ARD variable.")
-            return
-
-        top_values = overall["Value"].astype(str).tolist()[:10]
-        by_visit = variable_df[variable_df["VALUE"].astype(str).isin(top_values)].copy()
-        by_visit["VALUE"] = by_visit["VALUE"].astype(str)
-        counts = by_visit.groupby(["AVISIT", "VALUE"], dropna=False).size().reset_index(name="Count")
-        fig = px.bar(
-            counts,
-            x="AVISIT",
-            y="Count",
-            color="VALUE",
-            barmode="group",
-            color_discrete_sequence=JNJ_RED_PALETTE,
-            category_orders={"AVISIT": visits},
-            labels={"AVISIT": "Visit", "VALUE": variable},
-        )
-        fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10), legend_title_text=variable)
-        fig.update_xaxes(tickangle=-45)
-        st.plotly_chart(fig, width="stretch")
-
-
-def _render_variable_explorer(filtered: dict[str, pd.DataFrame]) -> None:
-    st.markdown("---")
-    st.markdown("### Variable Explorer")
-    st.caption(
-        "Upload an ARD CSV or use an ARD available in the project to explore "
-        "PARAMCD variables overall and across visits. AVAL is treated as numeric "
-        "and AVALC as categorical."
-    )
-
-    studies = filtered.get("01_STUDIES", pd.DataFrame())
-    study_ids = studies["Study ID"].dropna().astype(str).tolist() if "Study ID" in studies else []
-
-    # Store the uploaded ARD independently from the file_uploader widget.
-    # Widget state can be cleared when another dashboard section is rendered.
-    if "overview_ard_bytes" not in st.session_state:
-        st.session_state["overview_ard_bytes"] = None
-    if "overview_ard_name" not in st.session_state:
-        st.session_state["overview_ard_name"] = None
-    if "overview_ard_upload_version" not in st.session_state:
-        st.session_state["overview_ard_upload_version"] = 0
-
-    uploaded = st.file_uploader(
-        "Upload ARD (.csv)",
-        type=["csv"],
-        key=f"overview_ard_upload_{st.session_state['overview_ard_upload_version']}",
-        help="Upload an Analysis-Ready Dataset (ARD) CSV for the current session.",
-    )
-
-    if uploaded is not None:
-        new_bytes = uploaded.getvalue()
-        if (new_bytes != st.session_state["overview_ard_bytes"]
-                or uploaded.name != st.session_state["overview_ard_name"]):
-            st.session_state["overview_ard_bytes"] = new_bytes
-            st.session_state["overview_ard_name"] = uploaded.name
-
-    ard = None
-    source_label = None
-
-    if st.session_state["overview_ard_bytes"] is not None:
-        col_info, col_remove = st.columns([5, 1])
-        with col_info:
-            st.caption(f"Active uploaded ARD: {st.session_state['overview_ard_name']}")
-        with col_remove:
-            if st.button("Remove ARD", key="overview_remove_ard"):
-                st.session_state["overview_ard_bytes"] = None
-                st.session_state["overview_ard_name"] = None
-                st.session_state["overview_ard_upload_version"] += 1
-                st.rerun()
-
-        try:
-            ard = load_uploaded_ard(st.session_state["overview_ard_bytes"])
-            source_label = st.session_state["overview_ard_name"]
-        except Exception as exc:
-            st.error(f"The uploaded ARD could not be loaded: {exc}")
-            return
-    else:
-        files = discover_ard_files()
-        eligible_files = filter_ard_files_for_studies(files, study_ids) if files else []
-
-        if eligible_files:
-            file_labels = {}
-            for path in eligible_files:
-                sid = study_id_from_filename(path, study_ids)
-                file_labels[path] = f"{sid} · {path.name}" if sid else path.name
-
-            selected_path = st.selectbox(
-                "Or use an ARD available in the project",
-                options=eligible_files,
-                format_func=lambda p: file_labels[p],
-                key="overview_ard_file",
-            )
-
-            try:
-                ard = load_ard(str(Path(selected_path)))
-                source_label = file_labels[selected_path]
-            except Exception as exc:
-                st.error(f"The selected ARD could not be loaded: {exc}")
-                return
-        else:
-            st.info("Upload an ARD CSV above to start exploring variables.")
-            return
-
-    catalog = variable_catalog(tuple(ard.columns))
-    if catalog.empty:
-        st.warning(
-            "No columns matching PARAMCD_<parameter>_AVAL or "
-            "PARAMCD_<parameter>_AVALC were found in this ARD."
-        )
-        return
-
-    st.success(
-        f"ARD loaded: {source_label} · {len(ard):,} rows × "
-        f"{len(ard.columns):,} columns · {catalog['Variable'].nunique():,} PARAMCD variables"
-    )
-
-    search = st.text_input(
-        "Search variable",
-        placeholder="e.g. MAYO, SESTOT, UCEIS...",
-        key="overview_variable_search",
-    )
-    choices = catalog
-    if search.strip():
-        mask = (
-            catalog["Variable"].str.contains(search.strip(), case=False, na=False, regex=False)
-            | catalog["Source"].str.contains(search.strip(), case=False, na=False, regex=False)
-        )
-        choices = catalog[mask]
-
-    if choices.empty:
-        st.info("No variable matches the current search.")
-        return
-
-    selected_label = st.selectbox(
-        "Variable",
-        choices["Label"].tolist(),
-        key="overview_variable",
-    )
-    row = choices.loc[choices["Label"].eq(selected_label)].iloc[0]
-    variable_df, kind = prepare_variable_data(ard, row["Column"], row["Value Type"])
-
-    st.caption(
-        f"Source: {row['Source']}  •  Value type: {row['Value Type']}  •  "
-        f"Column: {row['Column']}"
-    )
-
-    if variable_df.empty:
-        st.info("This variable has no non-missing values in the selected ARD.")
-        return
-
-    observations = len(variable_df)
-    subjects = variable_df["USUBJID"].nunique() if "USUBJID" in variable_df else None
-    visits = ordered_visits(variable_df)
-
-    k1, k2, k3, k4, k5 = st.columns(5)
-
-    k1.metric("Observations", f"{observations:,}")
-
-    k2.metric(
-        "Subjects",
-        f"{subjects:,}" if subjects is not None else "—"
-    )
-
-    k3.metric(
-        "Visits",
-        f"{len(visits):,}" if visits else "—"
-    )
-
-    if kind == "numeric":
-        k4.metric(
-            "Mean",
-            f"{variable_df['VALUE'].mean():.2f}"
-        )
-
-        k5.metric(
-            "Median",
-            f"{variable_df['VALUE'].median():.2f}"
-        )
-
-        _render_numeric_explorer(
-        variable_df,
-        row["Variable"],
-        visits
-        )
-
-    else:
-        k4.metric(
-            "Categories",
-            f"{variable_df['VALUE'].nunique():,}"
-        )
-
-        k5.metric(
-            "Mode",
-            (
-             str(variable_df["VALUE"].mode().iloc[0])
-                if not variable_df["VALUE"].mode().empty
-                else "—"
-            )
-        )
-
-        _render_categorical_explorer(
-            variable_df,
-            row["Variable"],
-            visits
-        )
-
-    export_df = variable_df.copy()
-    export_df.insert(0, "PARAMCD", row["Variable"])
-    export_df.insert(1, "VALUE_TYPE", row["Value Type"])
-    export_df.insert(2, "SOURCE_COLUMN", row["Column"])
-
-
-def render(filtered: dict[str, pd.DataFrame], data: dict[str, pd.DataFrame]) -> None:
-    _render_portfolio_summary(filtered)
-    _render_portfolio_charts(filtered)
-    _render_variable_explorer(filtered)
